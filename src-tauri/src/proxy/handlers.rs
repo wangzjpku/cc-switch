@@ -2108,11 +2108,21 @@ async fn wrap_as_sse_response(
         Ok(response) => {
             let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
                 .await
-                .unwrap_or_default();
-            let sse_data = format!(
-                "data: {}\n\ndata: [DONE]\n\n",
-                String::from_utf8_lossy(&body_bytes)
-            );
+                .map_err(|e| {
+		    ProxyError::Internal(format!(
+		        "Orchestration response too large or read failed: {e}"
+		    ))
+		})?;
+            // SSE spec: each line of multi-line data must be prefixed with "data: "
+            let json_str = String::from_utf8_lossy(&body_bytes);
+            let mut sse_data = String::with_capacity(json_str.len() + 64);
+            for line in json_str.lines() {
+                sse_data.push_str("data: ");
+                sse_data.push_str(line);
+                sse_data.push('\n');
+            }
+            sse_data.push('\n');
+            sse_data.push_str("data: [DONE]\n\n");
             let stream = futures::stream::once(async move {
                 Ok::<_, std::convert::Infallible>(sse_data)
             });
